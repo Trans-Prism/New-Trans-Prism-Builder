@@ -118,7 +118,7 @@ def passthrough_upstream(profile, upstream_root, docs_sub, workdir):
     shutil.copytree(src, os.path.join(workdir, "docs"),
                     ignore=shutil.ignore_patterns("node_modules", "dist", ".vitepress/cache"))
     # 上游工程根文件（package.json/lock/uno.config）一并拷入，否则 workdir 不是可构建工程
-    for fn in ("package.json", "pnpm-lock.yaml", "uno.config.ts"):
+    for fn in ("package.json", "package-lock.json", "pnpm-lock.yaml", "uno.config.ts"):
         p = os.path.join(upstream_root, fn)
         if os.path.isfile(p):
             shutil.copy(p, os.path.join(workdir, fn))
@@ -151,12 +151,18 @@ def passthrough_upstream(profile, upstream_root, docs_sub, workdir):
     if profile.get("clean_urls") is False:
         content = re.sub(r"cleanUrls:\s*true", "cleanUrls: false", content)
         if "cleanUrls" not in content:
-            content = content.replace(
-                "export default withThemeContext(themeConfig, genConfig)",
-                "const __offlineConfig = withThemeContext(themeConfig, genConfig)\n"
-                "__offlineConfig.cleanUrls = false\n"
-                "export default __offlineConfig",
-            )
+            if "export default withThemeContext" in content:
+                content = content.replace(
+                    "export default withThemeContext(themeConfig, genConfig)",
+                    "const __offlineConfig = withThemeContext(themeConfig, genConfig)\n"
+                    "__offlineConfig.cleanUrls = false\n"
+                    "export default __offlineConfig",
+                )
+            elif "export default defineConfig({" in content:
+                content = content.replace(
+                    "export default defineConfig({",
+                    "export default defineConfig({\n  cleanUrls: false,",
+                )
     if content != orig:
         with open(cfg, "w", encoding="utf-8") as f:
             f.write(content)

@@ -32,4 +32,6 @@ fetch → wash → slim → build → pack → release → R2（只留两版）
 | pack | `tools/pack.py` | `dist/`→ZIP，超 `budget_mb` 直接 fail |
 | 分发 | `sync_vp_to_r2.yml` | R2 `vp-builder/releases/{tag}/` + `vp-builder/latest/`，**每个前缀只留最新+上一个两版** |
 
-离线约定：全站 `base: './'`，App 继续沿 `file://` 加载，无需起本地 server。
+离线约定：构建期 `base: '/'` + `cleanUrls: false`，打包期由 `tools/pack.py`（`relativize_html_for_file_protocol`）做深度感知相对化（`./`, `../`, `../../`）与目录 URL 显式 `.html` 补全，完美双兼容本地 `file://` 双击直开与 Trans Prism App 内部 Shelf HTTP 服务器加载。
+
+质量把关：每个项目打包后必须经 `tools/audit_links.py` 严格校验，确保 0 目录型未解析链接、0 本地引用 404，且产物体积在 `budget_mb` 门限以内。

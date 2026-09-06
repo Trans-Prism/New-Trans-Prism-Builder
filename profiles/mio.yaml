@@ -6,6 +6,7 @@ theme: self
 reuse_upstream_config: true
 # 上游 base 是 '/MioMtFWiki/'（GitHub Pages 用），离线包改写为 '/'
 base_overwrite: "/"
+clean_urls: false
 # 去掉离线无意义的外链统计脚本，避免 WebView 上报失败
 strip_scripts:
   - "https://cloud.umami.is/script.js"

@@ -69,6 +69,7 @@ jobs:
       run: |
         RELEASE_DATE=$(date -d "+8 hours" +%Y-%m-%d)
         python tools/pack.py --profile profiles/ftm.yaml --workdir work-ftm --date $RELEASE_DATE
+        python tools/audit_links.py work-ftm/docs/.vitepress/dist
         echo "TAG_NAME=ftm-$RELEASE_DATE" >> $GITHUB_ENV
         rm -rf official-source work-ftm-docs work-ftm
     - uses: softprops/action-gh-release@v2

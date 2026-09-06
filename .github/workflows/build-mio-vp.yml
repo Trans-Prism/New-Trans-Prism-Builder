@@ -68,6 +68,7 @@ jobs:
       run: |
         RELEASE_DATE=$(date -d "+8 hours" +%Y-%m-%d)
         python tools/pack.py --profile profiles/mio.yaml --workdir work-mio --date $RELEASE_DATE
+        python tools/audit_links.py work-mio/docs/.vitepress/dist
         echo "TAG_NAME=miomtfwiki-$RELEASE_DATE" >> $GITHUB_ENV
         rm -rf official-source work-mio
     - uses: softprops/action-gh-release@v2

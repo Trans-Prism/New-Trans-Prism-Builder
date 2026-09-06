@@ -68,6 +68,7 @@ jobs:
       run: |
         RELEASE_DATE=$(date -d "+8 hours" +%Y-%m-%d)
         python tools/pack.py --profile profiles/rle.yaml --workdir work-rle --date $RELEASE_DATE
+        python tools/audit_links.py work-rle/docs/.vitepress/dist
         echo "TAG_NAME=rle-$RELEASE_DATE" >> $GITHUB_ENV
         rm -rf official-source work-rle
     - uses: softprops/action-gh-release@v2

@@ -9,10 +9,12 @@ const nav: DefaultTheme.NavItem[] = {{NAV_JSON}}
 
 const baseConfig = {
   useTitleFromFrontmatter: true,
+  useTitleFromFileHeading: true,
   useFolderTitleFromIndexFile: true,
   useFolderLinkFromIndexFile: true,
+  sortMenusByFrontmatterOrder: true,
   collapsed: true,
-  documentRootPath: '/docs',
+  documentRootPath: 'docs',
 } satisfies Partial<SidebarOptions>
 
 const sidebarOptions = {{SIDEBAR_JSON}}

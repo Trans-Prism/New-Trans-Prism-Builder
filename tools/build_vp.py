@@ -39,10 +39,18 @@ def render(tmpl, mapping):
 def sidebar_json(roots):
     blocks = []
     for r in roots:
+        clean_r = r.strip("/")
+        if not clean_r:
+            # 根目录全局单侧边栏（FtM 等单语言全站通栏模式）
+            scan_path = ""
+            resolve_path = "/"
+        else:
+            scan_path = clean_r
+            resolve_path = f"/{clean_r}/"
         blocks.append(
             "  {\n    ...baseConfig,\n"
-            f'    scanStartPath: {json.dumps(r)},\n'
-            f'    resolvePath: {json.dumps("/" + r + "/")},\n'
+            f'    scanStartPath: {json.dumps(scan_path)},\n'
+            f'    resolvePath: {json.dumps(resolve_path)},\n'
             "    sortMenusByFrontmatterOrder: true,\n  }"
         )
     return "[\n" + ",\n".join(blocks) + "\n]"

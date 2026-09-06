@@ -525,6 +525,9 @@ def transform_markdown(file_content, file_path="", lang="zh-cn"):
             has_title = True
         elif sline.startswith('Author:'):
             line = 'author:' + line[7:]
+        elif sline.startswith('weight:'):
+            val = sline.split(':', 1)[1].strip()
+            new_fm_lines.append(f'order: {val}')
         # Remove Hugo-specific unused layout hints or map them
         if any(sline.startswith(k) for k in ['topToc:', 'enableToc:', 'hidden-timeliness:', 'collapsible:']):
             continue

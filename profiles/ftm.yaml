@@ -11,11 +11,11 @@ budget_mb: 40
 site_title: "FtM.wiki"
 site_description: "跨性别男性知识库"
 github_repo_link: "https://github.com/project-trans/FtM-wiki"
-# FtM 单语言：内容直接在 docs 根，无 zh-cn 层；导航必须指显式 index.html
+# FtM 单语言：内容直接在 docs 根，无 zh-cn 层；采用全站大通栏侧边栏（如 MtF/RLE）
 nav:
   - { text: "文档", link: "/hrt/index.html" }
   - { text: "手术", link: "/srs/index.html" }
   - { text: "换算工具", link: "/converter/index.html" }
   - { text: "关于", link: "/about-us.html" }
-sidebar_roots: ["hrt", "srs", "fms", "psycho", "converter", "misc", "rle"]
+sidebar_roots: [""]
 include_langs: ["hrt", "srs", "fms", "psycho", "converter", "misc", "rle"]

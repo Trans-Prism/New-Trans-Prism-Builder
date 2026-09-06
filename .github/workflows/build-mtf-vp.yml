@@ -42,7 +42,7 @@ jobs:
       with: { version: 10 }
     - uses: actions/setup-node@v4
       if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
-      with: { node-version: 20, cache: 'pnpm', cache-dependency-path: 'New-Trans-Prism-Builder/work-mtf/package.json' }
+      with: { node-version: 20 }
 
     - name: Wash + Slim + Scaffold
       if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'

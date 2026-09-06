@@ -1,0 +1,76 @@
+name: Sync VP Builder Release to R2
+
+# 新链分发：R2 布局与老链隔离（vp-builder/），每个前缀只留最新+上一个两版。
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["OTA Builder VP - MtF", "OTA Builder VP - FtM", "OTA Builder VP - RLE", "OTA Builder VP - Mio"]
+    types:
+      - completed
+
+jobs:
+  mirror-and-cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🗂️ 检出代码库
+        uses: actions/checkout@v4
+
+      - name: 🚀 按分类精准拉取、生成索引并同步
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          PROJECTS=("mtf" "ftm" "rle" "miomtfwiki")
+
+          for proj in "${PROJECTS[@]}"; do
+            echo "========================================"
+            echo "🔍 正在检索分类: $proj"
+
+            LATEST_TAG=$(gh release list --limit 30 --json tagName --jq '[.[] | select(.tagName | startswith("'"$proj"'"))] | .[0].tagName')
+
+            if [ -z "$LATEST_TAG" ] || [ "$LATEST_TAG" == "null" ]; then
+              echo "⚠️ 未找到 $proj 的历史发布记录，跳过。"
+              continue
+            fi
+
+            echo "✅ 找到 $proj 的最新版本: $LATEST_TAG"
+
+            rm -rf release_assets
+            mkdir release_assets
+            gh release download "$LATEST_TAG" --dir release_assets
+
+            # 1. 归档到带版本号的 releases/ 目录（新链隔离到 vp-builder/）
+            aws s3 sync release_assets s3://${{ secrets.R2_BUCKET_NAME }}/vp-builder/releases/$LATEST_TAG/ --endpoint-url ${{ secrets.R2_ENDPOINT }}
+
+            # 2. 清理 /latest/ 目录下的旧同类文件
+            echo "正在清理 /latest/ 目录中的旧版 $proj..."
+            aws s3 rm s3://${{ secrets.R2_BUCKET_NAME }}/vp-builder/latest/ --recursive --exclude "*" --include "$proj*.zip" --endpoint-url ${{ secrets.R2_ENDPOINT }}
+
+            # 3. 生成客户端需要的 latest.json
+            FILENAME=$(ls release_assets | grep .zip | head -n 1)
+            echo "{\"latest_file\": \"$FILENAME\", \"tag\": \"$LATEST_TAG\", \"update_time\": \"$(date -u +'%Y-%m-%dT%H:%M:%SZ')\"}" > release_assets/${proj}_latest.json
+
+            # 4. 同步新的文件和对应的 json 到 /latest/
+            aws s3 sync release_assets s3://${{ secrets.R2_BUCKET_NAME }}/vp-builder/latest/ --endpoint-url ${{ secrets.R2_ENDPOINT }}
+
+            # 5. 🧹 R2 归档只留两版：最新 + 上一个
+            echo "正在清理 $proj 的旧归档，只保留最新两版..."
+            ALL_TAGS=$(gh release list --limit 100 --json tagName --jq '[.[] | select(.tagName | startswith("'"$proj"'"))] | .[].tagName')
+            echo "$ALL_TAGS" | tail -n +3 | while read -r OLD_TAG; do
+              [ -z "$OLD_TAG" ] && continue
+              echo "删除旧归档: vp-builder/releases/$OLD_TAG/"
+              aws s3 rm s3://${{ secrets.R2_BUCKET_NAME }}/vp-builder/releases/$OLD_TAG/ --recursive --endpoint-url ${{ secrets.R2_ENDPOINT }}
+            done
+            KEEP1=$(echo "$ALL_TAGS" | sed -n '1p')
+            KEEP2=$(echo "$ALL_TAGS" | sed -n '2p')
+            R2_DIRS=$(aws s3 ls s3://${{ secrets.R2_BUCKET_NAME }}/vp-builder/releases/ --endpoint-url ${{ secrets.R2_ENDPOINT }} | awk '{print $2}' | tr -d '/' | grep "^${proj}" || true)
+            for d in $R2_DIRS; do
+              if [ "$d" != "$KEEP1" ] && [ "$d" != "$KEEP2" ]; then
+                echo "删除孤儿归档: vp-builder/releases/$d/"
+                aws s3 rm s3://${{ secrets.R2_BUCKET_NAME }}/vp-builder/releases/$d/ --recursive --endpoint-url ${{ secrets.R2_ENDPOINT }}
+              fi
+            done
+
+          done

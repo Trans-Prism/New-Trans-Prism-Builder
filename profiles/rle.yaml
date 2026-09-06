@@ -1,0 +1,10 @@
+# RLE profile — VitePress 直通（已用项目主题，复用上游 docs/.vitepress/config.ts）
+name: rle
+upstream: "https://github.com/project-trans/RLE-wiki.git"
+source_layout: vitepress
+theme: project-trans
+reuse_upstream_config: true
+tag_prefix: "rle"
+zip_prefix: "rle-wiki-site"
+pdf_base: "https://rle.wiki/"
+budget_mb: 60

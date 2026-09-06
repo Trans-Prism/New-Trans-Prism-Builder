@@ -1,0 +1,93 @@
+name: OTA Builder VP - FtM
+
+# FtM 与 MtF 同构（Hugo 系），错峰 02:10。步骤同 build-mtf-vp.yml，
+# 差异仅：上游 FtM-wiki、profile ftm.yaml、work-ftm 目录。
+on:
+  schedule:
+    - cron: '10 18 * * *'
+  workflow_dispatch:
+
+jobs:
+  build-ftm-vp:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: ./New-Trans-Prism-Builder
+    steps:
+    - name: Checkout Builder Repo
+      uses: actions/checkout@v4
+
+    - name: Check Upstream Hash
+      id: check
+      run: |
+        LATEST_HASH=$(git -c credential.helper= ls-remote https://github.com/project-trans/FtM-wiki.git HEAD | awk '{print $1}')
+        LOCAL_HASH=""; [ -f "profiles/ftm.last_hash" ] && LOCAL_HASH=$(cat profiles/ftm.last_hash)
+        if [ "$LATEST_HASH" == "$LOCAL_HASH" ]; then
+          echo "HAS_CHANGES=false" >> $GITHUB_OUTPUT
+        else
+          echo "HAS_CHANGES=true" >> $GITHUB_OUTPUT
+          echo "LATEST_HASH=$LATEST_HASH" >> $GITHUB_ENV
+        fi
+
+    - name: Clone Upstream Wiki
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      run: |
+        curl -sL https://github.com/project-trans/FtM-wiki/archive/HEAD.tar.gz -o upstream.tar.gz
+        mkdir -p official-source && tar xzf upstream.tar.gz -C official-source --strip-components=1 && rm upstream.tar.gz
+
+    - name: Setup Python + Node
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      uses: actions/setup-python@v5
+      with: { python-version: '3.10' }
+    - uses: pnpm/action-setup@v4
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      with: { version: 10 }
+    - uses: actions/setup-node@v4
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      with: { node-version: 20 }
+
+    - name: Wash + Slim + Scaffold
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      run: |
+        python -m pip install --upgrade pip Pillow pyyaml -q
+        python tools/wash_hugo.py --profile profiles/ftm.yaml --src official-source --dest work-ftm-docs
+        python tools/slim_images.py --docs work-ftm-docs
+        python tools/slim_pdfs.py --docs work-ftm-docs --pdf-base https://ftm.wiki/static/documents/
+        python tools/build_vp.py --profile profiles/ftm.yaml --docs work-ftm-docs --workdir work-ftm
+
+    - name: Build VitePress
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      working-directory: ./New-Trans-Prism-Builder/work-ftm
+      run: |
+        pnpm install --no-frozen-lockfile
+        pnpm build
+
+    - name: Pack + Release
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      run: |
+        RELEASE_DATE=$(date -d "+8 hours" +%Y-%m-%d)
+        python tools/pack.py --profile profiles/ftm.yaml --workdir work-ftm --date $RELEASE_DATE
+        echo "TAG_NAME=ftm-$RELEASE_DATE" >> $GITHUB_ENV
+        rm -rf official-source work-ftm-docs work-ftm
+    - uses: softprops/action-gh-release@v2
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      with:
+        files: New-Trans-Prism-Builder/ftm-wiki-site-*.zip
+        tag_name: ${{ env.TAG_NAME }}
+        name: "FtM VP 自动构建版 ${{ env.TAG_NAME }}"
+        body: "🤖 上游同步 Hash: `${{ env.LATEST_HASH }}`"
+
+    - name: Commit Sync Log
+      if: steps.check.outputs.HAS_CHANGES == 'true'
+      working-directory: .
+      run: |
+        echo ${{ env.LATEST_HASH }} > New-Trans-Prism-Builder/profiles/ftm.last_hash
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
+        git fetch origin ${{ github.ref_name }} && git reset --soft FETCH_HEAD
+        git add New-Trans-Prism-Builder/profiles/ftm.last_hash
+        git commit -m "📝 chore(ftm): 自动更新指纹日志" || echo "无新日志需要提交"
+        git push origin HEAD:${{ github.ref_name }}

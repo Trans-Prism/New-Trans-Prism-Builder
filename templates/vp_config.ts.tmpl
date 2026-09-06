@@ -1,0 +1,45 @@
+// 由 tools/build_vp.py 按 profiles/<name>.yaml 生成，别手改。
+import type { SidebarOptions } from '@project-trans/vitepress-theme-project-trans/theme'
+import type { ThemeContext } from '@project-trans/vitepress-theme-project-trans/utils'
+import type { DefaultTheme } from 'vitepress'
+import genConfig from '@project-trans/vitepress-theme-project-trans/config'
+import { withThemeContext } from '@project-trans/vitepress-theme-project-trans/utils'
+
+const nav: DefaultTheme.NavItem[] = {{NAV_JSON}}
+
+const baseConfig = {
+  useTitleFromFrontmatter: true,
+  useFolderTitleFromIndexFile: true,
+  useFolderLinkFromIndexFile: true,
+  collapsed: true,
+  documentRootPath: '/docs',
+} satisfies Partial<SidebarOptions>
+
+const sidebarOptions = {{SIDEBAR_JSON}}
+
+const themeConfig: ThemeContext = {
+  siteTitle: '{{SITE_TITLE}}',
+  siteDescription: `{{SITE_DESC}}`,
+  githubRepoLink: '{{REPO_LINK}}',
+  rootDir: 'docs',
+  include: {{INCLUDE_JSON}},
+  nav,
+  sidebarOptions,
+  enableChangeLog: false,
+  enableSuggestionBox: false,
+  enableDisclaimer: false,
+}
+
+// https://vitepress.dev/reference/site-config
+const config = withThemeContext(themeConfig, genConfig)
+
+// 离线包：容忍上游 ref 短码残留的死链 + 关搜索
+// @ts-expect-error - offline build without local search
+config.themeConfig.search = false
+config.ignoreDeadLinks = true
+config.base = '/'
+// 主题默认 cleanUrls:true 会生成无后缀/目录式链接（RLE 在线站用），
+// 离线 file:// 下浏览器不解析目录 URL，必须保留 .html 后缀
+config.cleanUrls = false
+
+export default config

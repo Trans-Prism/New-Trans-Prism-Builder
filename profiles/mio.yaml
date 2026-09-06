@@ -1,0 +1,15 @@
+# Mio profile — VitePress 直通，用自带主题（DefaultTheme+自研CSS），只改写 base
+name: mio
+upstream: "https://github.com/KitsuMio/MioMtFWiki.git"
+source_layout: vitepress
+theme: self
+reuse_upstream_config: true
+# 上游 base 是 '/MioMtFWiki/'（GitHub Pages 用），离线包改写为 '/'
+base_overwrite: "/"
+# 去掉离线无意义的外链统计脚本，避免 WebView 上报失败
+strip_scripts:
+  - "https://cloud.umami.is/script.js"
+tag_prefix: "miomtfwiki"
+zip_prefix: "miomtfwiki-site"
+pdf_base: ""
+budget_mb: 60

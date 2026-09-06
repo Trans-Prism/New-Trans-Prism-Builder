@@ -1,0 +1,21 @@
+# MtF profile — Hugo → VitePress（项目主题）
+name: mtf
+upstream: "https://github.com/project-trans/MtF-wiki.git"
+source_layout: hugo            # hugo | vitepress
+theme: project-trans           # project-trans | self
+tag_prefix: "mtf"
+zip_prefix: "mtf-wiki-site"
+pdf_base: "https://mtf.wiki/static/documents/"
+budget_mb: 120
+
+site_title: "MtF.wiki"
+site_description: "MtF.wiki 是一个由跨性别女性社群共同维护的开放性信息知识库"
+github_repo_link: "https://github.com/project-trans/MtF-wiki"
+# 顶栏导航（对应洗出后的顶级目录；必须指显式 index.html，file:// 不解析目录 URL）
+nav:
+  - { text: "文档", link: "/zh-cn/docs/index.html" }
+  - { text: "换算工具", link: "/zh-cn/converter/index.html" }
+  - { text: "关于", link: "/zh-cn/about/index.html" }
+# 侧边栏扫描根（传给 vitepress-sidebar）
+sidebar_roots: ["zh-cn/docs", "zh-cn/converter", "zh-cn/about"]
+include_langs: ["zh-cn", "zh-hant", "en", "ja"]

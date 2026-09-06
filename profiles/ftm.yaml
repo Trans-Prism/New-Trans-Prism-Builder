@@ -1,0 +1,18 @@
+# FtM profile — Hugo → VitePress（项目主题），与 MtF 孪生
+name: ftm
+upstream: "https://github.com/project-trans/FtM-wiki.git"
+source_layout: hugo
+theme: project-trans
+tag_prefix: "ftm"
+zip_prefix: "ftm-wiki-site"
+pdf_base: "https://ftm.wiki/static/documents/"
+budget_mb: 40
+
+site_title: "FtM.wiki"
+site_description: "跨性别男性知识库"
+github_repo_link: "https://github.com/project-trans/FtM-wiki"
+nav:
+  - { text: "文档", link: "/zh-cn/" }
+  - { text: "关于", link: "/zh-cn/about-us/" }
+sidebar_roots: ["zh-cn"]
+include_langs: ["zh-cn"]

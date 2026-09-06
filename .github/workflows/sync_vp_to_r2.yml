@@ -4,7 +4,7 @@ name: Sync VP Builder Release to R2
 on:
   workflow_dispatch:
   workflow_run:
-    workflows: ["OTA Builder VP - MtF", "OTA Builder VP - FtM", "OTA Builder VP - RLE", "OTA Builder VP - Mio"]
+    workflows: ["OTA Builder VP - MtF", "OTA Builder VP - FtM", "OTA Builder VP - RLE", "OTA Builder VP - Mio", "OTA Builder - Oyama's HRT Tracker", "OTA Builder - TransMTF HRT Tracker"]
     types:
       - completed
 
@@ -22,7 +22,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
         run: |
-          PROJECTS=("mtf" "ftm" "rle" "miomtfwiki")
+          PROJECTS=("mtf" "ftm" "rle" "miomtfwiki" "tracker" "transmtf_tracker")
 
           for proj in "${PROJECTS[@]}"; do
             echo "========================================"
@@ -46,14 +46,19 @@ jobs:
 
             # 2. 清理 /latest/ 目录下的旧同类文件
             echo "正在清理 /latest/ 目录中的旧版 $proj..."
-            aws s3 rm s3://${{ secrets.R2_BUCKET_NAME }}/vp-builder/latest/ --recursive --exclude "*" --include "$proj*.zip" --endpoint-url ${{ secrets.R2_ENDPOINT }}
+            CLEAN_GLOB="$proj*.zip"
+            if [ "$proj" = "tracker" ]; then CLEAN_GLOB="hrt_tracker_update-*.zip"; fi
+            aws s3 rm s3://${{ secrets.R2_BUCKET_NAME }}/vp-builder/latest/ --recursive --exclude "*" --include "$CLEAN_GLOB" --endpoint-url ${{ secrets.R2_ENDPOINT }}
 
             # 3. 生成客户端需要的 latest.json
             FILENAME=$(ls release_assets | grep .zip | head -n 1)
             echo "{\"latest_file\": \"$FILENAME\", \"tag\": \"$LATEST_TAG\", \"update_time\": \"$(date -u +'%Y-%m-%dT%H:%M:%SZ')\"}" > release_assets/${proj}_latest.json
 
-            # 4. 同步新的文件和对应的 json 到 /latest/
+            # 4. 同步新的文件和对应的 json 到 /latest/（同时兼容同步到老链 builder/ 供旧 App 读取）
             aws s3 sync release_assets s3://${{ secrets.R2_BUCKET_NAME }}/vp-builder/latest/ --endpoint-url ${{ secrets.R2_ENDPOINT }}
+            if [ "$proj" = "tracker" ] || [ "$proj" = "transmtf_tracker" ]; then
+              aws s3 sync release_assets s3://${{ secrets.R2_BUCKET_NAME }}/builder/latest/ --endpoint-url ${{ secrets.R2_ENDPOINT }}
+            fi
 
             # 5. 🧹 R2 归档只留两版：最新 + 上一个
             echo "正在清理 $proj 的旧归档，只保留最新两版..."

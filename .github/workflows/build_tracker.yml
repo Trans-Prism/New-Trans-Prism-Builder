@@ -1,0 +1,114 @@
+name: OTA Builder - Oyama's HRT Tracker
+
+on:
+  schedule:
+    # ⏱️ 每天北京时间凌晨 3 点 (19:00 UTC) 执行
+    - cron: '0 19 * * *'
+  workflow_dispatch:
+
+jobs:
+  build-tracker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout Builder Repo
+      uses: actions/checkout@v4
+
+    - name: Check Upstream Hash
+      id: check
+      run: |
+        UPSTREAM_URL="https://github.com/SmirnovaOyama/Oyama-s-HRT-Tracker.git"
+        LATEST_HASH=$(git -c credential.helper= ls-remote $UPSTREAM_URL HEAD | awk '{print $1}')
+        
+        LOCAL_HASH=""
+        if [ -f "tracker/last_sync_hash.txt" ]; then
+          LOCAL_HASH=$(cat tracker/last_sync_hash.txt)
+        fi
+        
+        # 始终输出 LATEST_HASH，确保后续步骤在任何触发条件下都能访问
+        echo "LATEST_HASH=$LATEST_HASH" >> $GITHUB_ENV
+        echo "LATEST_HASH=$LATEST_HASH" >> $GITHUB_OUTPUT
+        
+        if [ "$LATEST_HASH" == "$LOCAL_HASH" ]; then
+          echo "HAS_CHANGES=false" >> $GITHUB_OUTPUT
+        else
+          echo "HAS_CHANGES=true" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Set up Node.js
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Clone Upstream Tracker
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      run: |
+        git clone --depth 1 https://github.com/SmirnovaOyama/Oyama-s-HRT-Tracker.git official-source
+
+    - name: Inject Relative Path Base to Vite Config
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      shell: python
+      run: |
+        import os
+        vite_path = "official-source/vite.config.ts"
+        if os.path.exists(vite_path):
+            with open(vite_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            if "base:" not in content:
+                # 强行在 return { 后注入 base: './'
+                content = content.replace("return {", "return {\n    base: './',", 1)
+                with open(vite_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                print("Successfully injected base: './'")
+            else:
+                print("base is already configured, checking value...")
+        else:
+            print("vite.config.ts not found!")
+
+    - name: Build Upstream Tracker
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      run: |
+        cd official-source
+        npm install
+        npm run build
+
+    - name: Package Dist
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      run: |
+        RELEASE_DATE=$(date -d "+8 hours" +%Y-%m-%d)
+        echo "RELEASE_DATE=$RELEASE_DATE" >> $GITHUB_ENV
+        
+        cd official-source/dist
+        zip -r ../../hrt_tracker_update-$RELEASE_DATE.zip *
+        cd ../..
+
+    - name: Create GitHub Release
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RELEASE_DATE: ${{ env.RELEASE_DATE }}
+      run: |
+        TAG_NAME="tracker-${RELEASE_DATE}"
+        gh release create "$TAG_NAME" hrt_tracker_update-${RELEASE_DATE}.zip \
+          --title "Tracker 自动构建版 $TAG_NAME" \
+          --notes "🤖 上游同步 Hash: \`${{ env.LATEST_HASH }}\`"
+
+    - name: Commit Sync Log
+      if: steps.check.outputs.HAS_CHANGES == 'true'
+      run: |
+        mkdir -p tracker
+        echo ${{ env.LATEST_HASH }} > tracker/last_sync_hash.txt
+        
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        
+        git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
+        git fetch origin ${{ github.ref_name }}
+        git reset --soft FETCH_HEAD
+        
+        git add tracker/last_sync_hash.txt
+        git commit -m "📝 chore(tracker): 自动更新 tracker 指纹日志" || echo "无新日志需要提交"
+        git push origin HEAD:${{ github.ref_name }}

@@ -1,0 +1,450 @@
+name: OTA Builder - TransMTF HRT Tracker
+
+on:
+  schedule:
+    # ⏱️ 每天北京时间凌晨 3:30 (19:30 UTC) 执行 — 接在 Oyama Tracker（03:00）之后错峰
+    - cron: '30 19 * * *'
+  workflow_dispatch:
+
+jobs:
+  build-transmtf-tracker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout Builder Repo
+      uses: actions/checkout@v4
+
+    - name: Check Upstream Hash
+      id: check
+      run: |
+        UPSTREAM_URL="https://github.com/TransmtfTeam/Transmtf-HRT-Tracker.git"
+        LATEST_HASH=$(git -c credential.helper= ls-remote $UPSTREAM_URL HEAD | awk '{print $1}')
+
+        LOCAL_HASH=""
+        if [ -f "transmtf_tracker/last_sync_hash.txt" ]; then
+          LOCAL_HASH=$(cat transmtf_tracker/last_sync_hash.txt)
+        fi
+
+        echo "LATEST_HASH=$LATEST_HASH" >> $GITHUB_ENV
+        echo "LATEST_HASH=$LATEST_HASH" >> $GITHUB_OUTPUT
+
+        if [ "$LATEST_HASH" == "$LOCAL_HASH" ]; then
+          echo "HAS_CHANGES=false" >> $GITHUB_OUTPUT
+        else
+          echo "HAS_CHANGES=true" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Set up Node.js
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Clone Upstream Tracker (Source Files)
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      run: |
+        git clone --depth 1 https://github.com/TransmtfTeam/Transmtf-HRT-Tracker.git official-source
+
+    - name: Scaffold Fresh Vite Project (avoid import map CDN issue)
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      run: |
+        # Upstream index.html ships an esm.sh import map + cdn.tailwindcss.com runtime
+        # compiler that cannot resolve in CI. Per upstream README we scaffold a clean
+        # Vite project (deps from node_modules, no import map) and copy source in.
+        npm create vite@latest offline-build -- --template react-ts
+        cd offline-build
+        npm install
+        # Install the FULL upstream dependency set, pinned to upstream package.json ranges.
+        # Rationale:
+        #  - react/react-dom@18: scaffold ships React 19 but upstream targets 18.
+        #  - lucide-react@^0.344.0: MUST be pinned — newer lucide (1.x) removed the
+        #    branded `Github` icon used by src/pages/SettingsPage.tsx, which breaks the
+        #    build with MISSING_EXPORT "Github".
+        #  - html-to-image / jsqr / prop-types / qrcode.react / react-router-dom: declared
+        #    in upstream package.json but were missing here, so any feature using them
+        #    would have broken once the type-export errors below were fixed.
+        npm install --save-exact react@^18.3.1 react-dom@^18.3.1
+        npm install --save-exact lucide-react@^0.344.0
+        npm install recharts@^2.12.7 uuid@^9.0.1 @types/uuid@^10.0.0 \
+                    clsx@^2.1.1 tailwind-merge@^3.4.0 \
+                    html-to-image@^1.11.13 jsqr@1.4.0 prop-types@15.8.1 \
+                    qrcode.react@^4.1.0 react-router-dom@^7.11.0
+        # Install Tailwind CSS + PostCSS to replace the stripped cdn.tailwindcss.com CDN.
+        # Upstream uses the CDN JIT compiler at runtime for ALL utility classes; offline
+        # builds must pre-generate them via PostCSS during vite build.
+        npm install --save-dev tailwindcss@^3.4.7 postcss autoprefixer
+
+    - name: Copy Upstream Source into Fresh Project
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      run: |
+        # Upstream has index.tsx at root importing './src/...' 
+        # We preserve this structure: index.tsx at root, src/ below it
+
+        # 1. Remove scaffold src/ contents
+        rm -rf offline-build/src/*
+
+        # 2. Copy upstream's src/ (components, pages, contexts, etc.)
+        cp -r official-source/src/* offline-build/src/
+
+        # 3. Copy upstream's entry point to root (keeps './src/...' imports valid)
+        cp official-source/index.tsx offline-build/index.tsx
+
+        # 4. Copy root-level source files to PROJECT ROOT (upstream has logic.ts/pk.ts at root)
+        cp official-source/logic.ts offline-build/
+        cp official-source/pk.ts offline-build/
+        cp official-source/personalModel.ts offline-build/
+        cp official-source/calibration.ts offline-build/
+        cp official-source/types.ts offline-build/
+        cp official-source/worker.ts offline-build/
+        cp official-source/mipd.ts offline-build/
+
+        # 5. ALSO copy all root-level source files into src/
+        #    - src/components/* uses ../logic → src/logic.ts
+        #    - src/logic.ts uses ./types, ./pk, ./calibration, ./personalModel, ./mipd → src/
+        cp official-source/logic.ts offline-build/src/logic.ts
+        cp official-source/pk.ts offline-build/src/pk.ts
+        cp official-source/personalModel.ts offline-build/src/personalModel.ts
+        cp official-source/calibration.ts offline-build/src/calibration.ts
+        cp official-source/types.ts offline-build/src/types.ts
+        cp official-source/mipd.ts offline-build/src/mipd.ts
+
+        # 6. Copy public assets (favicon etc.)
+        cp -r official-source/public/* offline-build/public/ 2>/dev/null || true
+
+    - name: Inject Offline Configuration
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      shell: python
+      run: |
+        import os, re
+
+        build_dir = "offline-build"
+
+        # ── 1. Use upstream's index.html as base ──
+        # CRITICAL: the scaffold's index.html lacks the upstream's inline <style> block
+        # (8.7 KB of CSS custom properties, animations, glass effects, dark mode theme).
+        # Using the scaffold as base discards all of that → only ~70% visual fidelity.
+        # Instead we take the upstream's index.html, keep everything except CDN scripts,
+        # and let Vite process it as the build template (it already has
+        # <script type="module" src="/index.tsx">).
+        upstream_index = os.path.join("official-source", "index.html")
+        with open(upstream_index, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        # Strip CDN Tailwind (replaced by PostCSS plugin in step 5)
+        html = re.sub(
+            r'<script[^>]*src="https://cdn\.tailwindcss\.com[^"]*"[^>]*></script>\s*',
+            '',
+            html,
+            flags=re.IGNORECASE,
+        )
+        # Strip import map (replaced by npm deps in Scaffold step)
+        html = re.sub(
+            r'\s*<script type="importmap">.*?</script>\s*',
+            '\n',
+            html,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+
+        # Write as the scaffold's index.html (Vite uses it as build template,
+        # will inject hashed <script>/<link> tags for the built bundles)
+        index_path = os.path.join(build_dir, "index.html")
+        with open(index_path, "w", encoding="utf-8") as f:
+            f.write(html)
+        print("index.html: upstream template with inline <style> preserved, CDN/importmap stripped")
+
+        # ── 2. Inject base: './' into vite.config.ts ──
+        vite_path = os.path.join(build_dir, "vite.config.ts")
+        with open(vite_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        if "base:" not in content:
+            content = content.replace("defineConfig({", "defineConfig({\n  base: './',", 1)
+            with open(vite_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            print("vite.config.ts: injected base: './'")
+        else:
+            print("vite.config.ts: base already configured")
+
+        # ── 3. Remove VitePWA plugin if present (scaffold won't have it) ──
+        content_orig = content
+        content = re.sub(
+            r"import\s+.*VitePWA.*from\s+['\"].*['\"];?\s*",
+            "",
+            content,
+        )
+        content = re.sub(
+            r",?\s*VitePWA\(\{.*?\}\)\s*",
+            "",
+            content,
+            flags=re.DOTALL,
+        )
+        if content != content_orig:
+            with open(vite_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            print("vite.config.ts: stripped VitePWA plugin")
+        else:
+            print("vite.config.ts: no PWA plugin to strip")
+
+        # ── 3b. Inject '@' path alias (project root) into vite.config.ts ──
+        # Upstream vite.config.ts + tsconfig.json declare an alias '@' → project root
+        # (NOT ./src), and some source files import via '@/...'. The scaffold's
+        # vite.config.ts has no resolve.alias, so those imports would fail to resolve.
+        # Inject a self-contained, valid ESM snippet: ensure `path` is imported and add
+        # `resolve.alias`. import.meta.dirname (Node 20.11+) gives the project root in ESM.
+        # NOTE: the replacement string is TS source text, NOT a Python expression — every
+        # identifier here lands verbatim in vite.config.ts.
+        if "resolve:" not in content:
+            if "import path from 'path'" not in content and "import path from \"path\"" not in content:
+                content = "import path from 'path';\n" + content
+            content = content.replace(
+                "plugins: [react()],",
+                "plugins: [react()],\n  resolve: { alias: { '@': path.resolve(import.meta.dirname, '.') } },",
+                1,
+            )
+            with open(vite_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            print("vite.config.ts: injected '@' alias → project root")
+        else:
+            print("vite.config.ts: resolve already present, alias left as-is")
+
+        # ── 3c. Replace scaffold tsconfig with upstream's (drop verbatimModuleSyntax) ──
+        # CRITICAL: the Vite react-ts scaffold's tsconfig.app.json sets
+        # "verbatimModuleSyntax": true. Upstream re-exports types across modules using
+        # the mixed syntax `export { Route, type DoseEvent, ... } from './types'`. Under
+        # verbatimModuleSyntax (TS 5+ strict mode) Rolldown drops those type re-exports
+        # and downstream `import { DoseEvent }` fails with MISSING_EXPORT. Upstream's own
+        # tsconfig.json uses isolatedModules WITHOUT verbatimModuleSyntax, which is the
+        # configuration the source code was written against. We adopt upstream's tsconfig.
+        # Also copy upstream tsconfig.json over the scaffold root tsconfig (the scaffold
+        # uses a tsconfig.json that merely references tsconfig.app/node.json, which we
+        # are removing).
+        import shutil
+        upstream_tsconfig = os.path.join("official-source", "tsconfig.json")
+        dest_root_tsconfig = os.path.join(build_dir, "tsconfig.json")
+        shutil.copyfile(upstream_tsconfig, dest_root_tsconfig)
+        # Remove the scaffold's split tsconfig files so TS/Vite only sees upstream's.
+        for stale in ("tsconfig.app.json", "tsconfig.node.json"):
+            stale_path = os.path.join(build_dir, stale)
+            if os.path.exists(stale_path):
+                os.remove(stale_path)
+        print("tsconfig: replaced scaffold tsconfig with upstream (no verbatimModuleSyntax)")
+
+        # ── 4. Fix ./src/ import paths inside src/ copies of root-level source files ──
+        # Root-level sources (logic.ts, pk.ts, ...) reference modules as "./src/..."
+        # because upstream's project root sits one level above src/. When these files are
+        # ALSO copied INTO offline-build/src/ (step 5 above, so src/components/* can reach
+        # them via ../logic), the leading "src/" segment flips from correct to wrong:
+        # "./src/utils/dataEncryption" resolves to src/src/utils/dataEncryption (double
+        # nested) and breaks the Vite build with UNRESOLVED_IMPORT.
+        # Strip the redundant leading "src/" segment so imports resolve relative to src/.
+        # The root-level copies (offline-build/*.ts) intentionally keep "./src/..." and
+        # are NOT touched here. Keep this list in sync with the cp step above.
+        root_source_files = [
+            "logic.ts", "pk.ts", "personalModel.ts",
+            "calibration.ts", "types.ts", "mipd.ts",
+        ]
+        src_dir = os.path.join(build_dir, "src")
+        fixed_files = 0
+        for fname in root_source_files:
+            fpath = os.path.join(src_dir, fname)
+            if not os.path.exists(fpath):
+                continue
+            with open(fpath, "r", encoding="utf-8") as f:
+                src_text = f.read()
+            # "./src/ → "./   "../src/ → "../   (covers static + dynamic import paths,
+            # single/double quotes and template literals)
+            patched = re.sub(r'(["\'`])(\.{1,2}/)src/', r'\1\2', src_text)
+            if patched != src_text:
+                with open(fpath, "w", encoding="utf-8") as f:
+                    f.write(patched)
+                fixed_files += 1
+                print("src/{}: stripped redundant 'src/' segment from imports".format(fname))
+        if fixed_files == 0:
+            print("src/ root-source copies: no './src/' imports needing fix")
+        else:
+            print("src/ root-source copies: fixed {} file(s)".format(fixed_files))
+
+        # ── 5. Create Tailwind CSS + PostCSS config (replace stripped CDN) ──
+        # CRITICAL: upstream relies entirely on cdn.tailwindcss.com JIT compiler for ALL
+        # Tailwind utility classes (flex, p-4, bg-white, rounded-lg, etc.). The CDN script
+        # was stripped in step 1. Without PostCSS + tailwindcss, the built JS has NO CSS
+        # definitions for these classes → the page renders completely unstyled ("毛坯房").
+        # We create PostCSS/Tailwind config files so Vite (which auto-detects postcss.config)
+        # generates the utility CSS during the build. New config files are written as JS/TS
+        # source text (Python f-strings), NOT Python objects — every character lands verbatim.
+
+        # 5a. Create tailwind.config.js (ESM, matching the project's "type": "module")
+        tailwind_config_path = os.path.join(build_dir, "tailwind.config.js")
+        if not os.path.exists(tailwind_config_path):
+            with open(tailwind_config_path, "w", encoding="utf-8") as f:
+                f.write(
+                    "/** @type {import('tailwindcss').Config} */\n"
+                    "export default {\n"
+                    "  content: ['./index.html', './src/**/*.{ts,tsx}'],\n"
+                    "  theme: { extend: {} },\n"
+                    "  plugins: [],\n"
+                    "}\n"
+                )
+            print("tailwind.config.js: created with src/ content paths")
+        else:
+            print("tailwind.config.js: already exists, skipping")
+
+        # 5b. Create postcss.config.js — Vite auto-detects this in project root
+        postcss_config_path = os.path.join(build_dir, "postcss.config.js")
+        if not os.path.exists(postcss_config_path):
+            with open(postcss_config_path, "w", encoding="utf-8") as f:
+                f.write(
+                    "export default {\n"
+                    "  plugins: {\n"
+                    "    tailwindcss: {},\n"
+                    "    autoprefixer: {},\n"
+                    "  },\n"
+                    "}\n"
+                )
+            print("postcss.config.js: created with tailwindcss + autoprefixer plugins")
+        else:
+            print("postcss.config.js: already exists, skipping")
+
+        # 5c. Create src/index.css with Tailwind directives (entry point for utility CSS)
+        #     Vite processes this via PostCSS → tailwindcss plugin scans content paths.
+        css_path = os.path.join(build_dir, "src", "index.css")
+        if not os.path.exists(css_path):
+            with open(css_path, "w", encoding="utf-8") as f:
+                f.write(
+                    "@tailwind base;\n"
+                    "@tailwind components;\n"
+                    "@tailwind utilities;\n"
+                )
+            print("src/index.css: created with Tailwind directives")
+        else:
+            print("src/index.css: already exists, skipping")
+
+        # 5d. Import src/index.css in the entry point (index.tsx) so Vite includes it
+        entry_path = os.path.join(build_dir, "index.tsx")
+        with open(entry_path, "r", encoding="utf-8") as f:
+            entry_content = f.read()
+        if "index.css" not in entry_content:
+            entry_content = "import './src/index.css';\n" + entry_content
+            with open(entry_path, "w", encoding="utf-8") as f:
+                f.write(entry_content)
+            print("index.tsx: prepended import './src/index.css'")
+        else:
+            print("index.tsx: already imports CSS, skipping")
+
+        print("Offline configuration complete")
+
+    - name: Build Offline Bundle
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      run: |
+        cd offline-build
+        npx vite build
+
+    - name: Inject Missing CSS Variables & Glass Classes
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      shell: python
+      run: |
+        import os, glob
+
+        dist_dir = "offline-build/dist"
+        css_files = glob.glob(os.path.join(dist_dir, "assets", "*.css"))
+
+        if not css_files:
+            print("WARNING: No CSS file found in dist/assets/")
+            exit(0)
+
+        css_path = css_files[0]
+        with open(css_path, "r", encoding="utf-8") as f:
+            css = f.read()
+
+        # Check if the upstream's inline <style> block (CSS vars + glass classes)
+        # was preserved in the built output. If not, inject the missing CSS.
+        if "--bg-overlay" in css or "--bg-card" in css:
+            print("CSS variables already present in built output, skipping injection")
+            exit(0)
+
+        print("Upstream inline <style> block was lost during Vite build — injecting fallback CSS variables, glass classes, and button classes")
+
+        # CRITICAL: append AFTER the Tailwind CSS so glass/button classes override
+        # Tailwind utility classes (same specificity but later source order wins).
+        # Also use !important on glass class backgrounds to ensure no Tailwind
+        # utility (e.g. bg-transparent) can override them.
+        #
+        # glass-btn-primary: used by ALL positive action buttons (confirm/save/ok/submit)
+        #   — missing background makes white text buttons invisible.
+        # glass-btn: used by secondary/cancel buttons.
+        # btn-press-glass: scale-down press animation.
+        # accent-spinner: loading spinner inside buttons (e.g. "Generating...").
+        injected = """\
+        :root{--bg-primary:#fafbff;--bg-card:#ffffff;--bg-card-hover:#f1f5f9;--bg-secondary:#f1f5f9;--bg-overlay:rgba(15,23,42,0.45);--text-primary:#0f172a;--text-secondary:#475569;--text-tertiary:#94a3b8;--border-primary:#e2e8f0;--border-secondary:#eef2f7;--glass-border:rgba(255,255,255,0.18);--glass-bg-default:rgba(255,255,255,0.72);--glass-bg-heavy:rgba(255,255,255,0.88);--glass-bg-subtle:rgba(255,255,255,0.5);--glass-shadow:0 1px 3px rgba(15,23,42,0.04),0 8px 24px rgba(15,23,42,0.08);--shadow-sm:0 1px 2px rgba(15,23,42,0.06);--shadow-md:0 4px 6px rgba(15,23,42,0.08);--shadow-lg:0 10px 15px -3px rgba(15,23,42,0.08),0 4px 6px -4px rgba(15,23,42,0.04)}
+        .dark{--bg-primary:#0b1220;--bg-card:#111827;--bg-card-hover:#1f2937;--bg-secondary:#1f2937;--bg-overlay:rgba(0,0,0,0.6);--text-primary:#f1f5f9;--text-secondary:#cbd5e1;--text-tertiary:#94a3b8;--border-primary:#1f2937;--border-secondary:#243042;--glass-border:rgba(255,255,255,0.06);--glass-bg-default:rgba(30,41,59,0.82);--glass-bg-heavy:rgba(30,41,59,0.92);--glass-bg-subtle:rgba(30,41,59,0.5);--glass-shadow:0 1px 3px rgba(0,0,0,0.3),0 8px 24px rgba(0,0,0,0.4);--shadow-sm:0 1px 2px rgba(0,0,0,0.3);--shadow-md:0 4px 6px rgba(0,0,0,0.3);--shadow-lg:0 10px 15px -3px rgba(0,0,0,0.4),0 4px 6px -4px rgba(0,0,0,0.2)}
+        .glass-card,.glass-card*{background:var(--glass-bg-default)!important;border-color:var(--glass-border)!important}.glass-card{backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);box-shadow:var(--shadow-sm)}
+        .glass-heavy{background:var(--glass-bg-heavy)!important;border:1px solid var(--glass-border)!important;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:var(--glass-shadow)}
+        .glass-noise{position:relative}.glass-noise::before{content:"";position:absolute;inset:0;opacity:.03;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");background-size:256px 256px;pointer-events:none;z-index:0;border-radius:inherit}.glass-noise>*{position:relative;z-index:1}
+        .glass-modal{background:var(--bg-card)!important;border:1px solid var(--border-primary)!important;box-shadow:0 1px 3px rgba(15,23,42,0.04),0 8px 24px rgba(15,23,42,0.08),0 24px 64px rgba(15,23,42,0.12)}.dark .glass-modal{box-shadow:0 1px 3px rgba(0,0,0,0.3),0 8px 24px rgba(0,0,0,0.4),0 24px 64px rgba(0,0,0,0.5)}
+        .glass-accent{background:linear-gradient(135deg,rgba(var(--accent-rgb),0.08),var(--bg-card))!important}
+        .modal-spring-glass{animation:modalScaleIn 0.25s ease-out forwards}
+        @keyframes modalScaleIn{0%{opacity:0;transform:scale(0.94) translateY(6px)}60%{opacity:1;transform:scale(1.01) translateY(-1px)}to{opacity:1;transform:scale(1) translateY(0)}}
+        .animate-in{animation:animateIn 0.15s ease-out forwards}
+        @keyframes animateIn{0%{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+        .fade-in{animation:fadeIn 0.15s ease-out forwards}
+        @keyframes fadeIn{0%{opacity:0}to{opacity:1}}
+        .zoom-in-95{animation:zoomIn95 0.15s ease-out forwards}
+        @keyframes zoomIn95{0%{opacity:0;transform:scale(0.95)}to{opacity:1;transform:scale(1)}}
+        .duration-100{animation-duration:0.1s}
+        .glass-btn-primary{background:var(--accent-500)!important;color:#fff!important;border:1px solid transparent!important;transition:background 0.2s ease,transform 0.15s ease,box-shadow 0.15s ease!important}
+        .glass-btn-primary:hover{background:var(--accent-600)!important}
+        .glass-btn-primary:active{transform:scale(0.96)!important}
+        .glass-btn-primary:disabled{opacity:.5;cursor:not-allowed}
+        .glass-btn{background:var(--glass-bg-default)!important;color:var(--text-primary)!important;border:1px solid var(--glass-border)!important;transition:background 0.2s ease,transform 0.15s ease,box-shadow 0.15s ease!important}
+        .glass-btn:hover{background:var(--glass-bg-heavy)!important}
+        .glass-btn:active{transform:scale(0.96)!important}
+        .btn-press-glass{transition:transform 0.15s ease,box-shadow 0.15s ease!important}
+        .btn-press-glass:active{transform:scale(0.96)!important}
+        .accent-spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:accentSpin 0.6s linear infinite;vertical-align:middle;margin-right:6px}
+        @keyframes accentSpin{to{transform:rotate(360deg)}}
+        """
+
+        css = css + injected
+        with open(css_path, "w", encoding="utf-8") as f:
+            f.write(css)
+
+        print(f"Appended fallback CSS to {css_path} ({len(injected)} bytes appended at tail)")
+
+    - name: Package Dist
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      run: |
+        RELEASE_DATE=$(date -d "+8 hours" +%Y-%m-%d)
+        echo "RELEASE_DATE=$RELEASE_DATE" >> $GITHUB_ENV
+
+        cd offline-build/dist
+        zip -r ../../transmtf_tracker_update-$RELEASE_DATE.zip *
+        cd ../..
+
+    - name: Create GitHub Release
+      if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RELEASE_DATE: ${{ env.RELEASE_DATE }}
+      run: |
+        TAG_NAME="transmtf_tracker-${RELEASE_DATE}"
+        gh release create "$TAG_NAME" transmtf_tracker_update-${RELEASE_DATE}.zip \
+          --title "TransMTF Tracker 自动构建版 $TAG_NAME" \
+          --notes "🤖 上游同步 Hash: \`${{ env.LATEST_HASH }}\`"
+
+    - name: Commit Sync Log
+      if: steps.check.outputs.HAS_CHANGES == 'true'
+      run: |
+        mkdir -p transmtf_tracker
+        echo ${{ env.LATEST_HASH }} > transmtf_tracker/last_sync_hash.txt
+
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+        git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
+        git fetch origin ${{ github.ref_name }}
+        git reset --soft FETCH_HEAD
+
+        git add transmtf_tracker/last_sync_hash.txt
+        git commit -m "📝 chore(transmtf_tracker): 自动更新 TransMTF tracker 指纹日志" || echo "无新日志需要提交"
+        git push origin HEAD:${{ github.ref_name }}

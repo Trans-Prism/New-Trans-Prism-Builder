@@ -16,6 +16,8 @@
 | FtM Wiki | `project-trans/FtM-wiki` | Hugo | project-trans | `ftm-wiki-site-{date}.zip` |
 | RLE Wiki | `project-trans/RLE-wiki` | VitePress | project-trans（复用上游配置） | `rle-wiki-site-{date}.zip` |
 | MioMtF Wiki | `KitsuMio/MioMtFWiki` | VitePress | 自带（DefaultTheme+自研CSS） | `miomtfwiki-site-{date}.zip` |
+| Oyama HRT Tracker | `SmirnovaOyama/Oyama-s-HRT-Tracker` | Vite SPA | 自带 | `hrt_tracker_update-{date}.zip` |
+| TransMTF HRT Tracker | `TransmtfTeam/Transmtf-HRT-Tracker` | React + Tailwind | 自带 | `transmtf_tracker_update-{date}.zip` |
 
 ## 流水线
 

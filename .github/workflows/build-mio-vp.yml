@@ -12,9 +12,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    defaults:
-      run:
-        working-directory: ./New-Trans-Prism-Builder
     steps:
     - name: Checkout Builder Repo
       uses: actions/checkout@v4
@@ -58,7 +55,7 @@ jobs:
 
     - name: Build VitePress
       if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
-      working-directory: ./New-Trans-Prism-Builder/work-mio
+      working-directory: ./work-mio
       run: |
         npm install
         npm run docs:build
@@ -74,20 +71,19 @@ jobs:
     - uses: softprops/action-gh-release@v2
       if: steps.check.outputs.HAS_CHANGES == 'true' || github.event_name == 'workflow_dispatch'
       with:
-        files: New-Trans-Prism-Builder/miomtfwiki-site-*.zip
+        files: miomtfwiki-site-*.zip
         tag_name: ${{ env.TAG_NAME }}
         name: "Mio VP 自动构建版 ${{ env.TAG_NAME }}"
         body: "🤖 上游同步 Hash: `${{ env.LATEST_HASH }}`"
 
     - name: Commit Sync Log
       if: steps.check.outputs.HAS_CHANGES == 'true'
-      working-directory: .
       run: |
-        echo ${{ env.LATEST_HASH }} > New-Trans-Prism-Builder/profiles/mio.last_hash
+        echo ${{ env.LATEST_HASH }} > profiles/mio.last_hash
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
         git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
         git fetch origin ${{ github.ref_name }} && git reset --soft FETCH_HEAD
-        git add New-Trans-Prism-Builder/profiles/mio.last_hash
+        git add profiles/mio.last_hash
         git commit -m "📝 chore(mio): 自动更新指纹日志" || echo "无新日志需要提交"
         git push origin HEAD:${{ github.ref_name }}

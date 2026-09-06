@@ -109,6 +109,11 @@ def passthrough_upstream(profile, upstream_root, docs_sub, workdir):
     os.makedirs(workdir)
     shutil.copytree(src, os.path.join(workdir, "docs"),
                     ignore=shutil.ignore_patterns("node_modules", "dist", ".vitepress/cache"))
+    # 上游工程根文件（package.json/lock/uno.config）一并拷入，否则 workdir 不是可构建工程
+    for fn in ("package.json", "pnpm-lock.yaml", "uno.config.ts"):
+        p = os.path.join(upstream_root, fn)
+        if os.path.isfile(p):
+            shutil.copy(p, os.path.join(workdir, fn))
     # 主题版本 pin（仅 rle 有该依赖）
     pkg = os.path.join(workdir, "package.json")
     if os.path.exists(pkg) and profile.get("theme") == "project-trans":
@@ -122,14 +127,29 @@ def passthrough_upstream(profile, upstream_root, docs_sub, workdir):
         with open(pkg, "w", encoding="utf-8") as f:
             f.write(content)
     cfg = os.path.join(workdir, "docs", ".vitepress", "config.ts")
-    if profile.get("base_overwrite") and os.path.exists(cfg):
-        with open(cfg, encoding="utf-8") as f:
-            content = f.read()
+    if not os.path.exists(cfg):
+        return
+    with open(cfg, encoding="utf-8") as f:
+        content = f.read()
+    orig = content
+    if profile.get("base_overwrite"):
         content = re.sub(r"base:\s*['\"][^'\"]*['\"]", f"base: '{profile['base_overwrite']}'", content)
         for s in profile.get("strip_scripts", []):
             content = re.sub(
                 r"\s*\[[^\]]*src[^\]]*" + re.escape(s) + r"[^\]]*\],?", "", content
             )
+    # 离线 file:// 不解析目录 URL：上游在线站 cleanUrls:true 全是无后缀链接，
+    # 离线包强制 .html 后缀（pack 的审计会验证 0 缺失）
+    if profile.get("clean_urls") is False:
+        content = re.sub(r"cleanUrls:\s*true", "cleanUrls: false", content)
+        if "cleanUrls" not in content:
+            content = content.replace(
+                "export default withThemeContext(themeConfig, genConfig)",
+                "const __offlineConfig = withThemeContext(themeConfig, genConfig)\n"
+                "__offlineConfig.cleanUrls = false\n"
+                "export default __offlineConfig",
+            )
+    if content != orig:
         with open(cfg, "w", encoding="utf-8") as f:
             f.write(content)
     git_seed(workdir)

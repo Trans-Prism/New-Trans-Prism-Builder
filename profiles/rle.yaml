@@ -4,7 +4,10 @@ upstream: "https://github.com/project-trans/RLE-wiki.git"
 source_layout: vitepress
 theme: project-trans
 reuse_upstream_config: true
+# 上游在线站 cleanUrls:true（无后缀链接）；离线包强制 .html 后缀
+clean_urls: false
 tag_prefix: "rle"
 zip_prefix: "rle-wiki-site"
-pdf_base: "https://rle.wiki/"
+# 上游 PDF 在 docs/public/resources/ 下，在线地址为 rle.wiki/resources/…
+pdf_base: "https://rle.wiki/resources/"
 budget_mb: 60

@@ -29,6 +29,12 @@ RE_MD_LINK = re.compile(
     re.IGNORECASE,
 )
 RE_HTML_SRC = re.compile(r"((?:src|href)=[\"'])(.*?)([\"'])", re.IGNORECASE)
+# frontmatter 资源位（hero image 等）：`  src: /logo.png`，md/HTML 正则够不着
+RE_FRONTMATTER_ASSET = re.compile(
+    r"(?m)^(?P<indent>\s*)(?P<key>src|image|logo|icon|cover|banner|poster|avatar|og:image)"
+    r":\s*(?P<q>[\"']?)(?P<url>[^\"'\s]+\.(?:png|jpe?g|gif|bmp|webp))(?P=q)(?P<tail>\s*)$",
+    re.IGNORECASE,
+)
 
 
 def convert_bitmap(path, max_width, quality):
@@ -159,6 +165,12 @@ def main():
                 lambda m: m.group(1) + fix_url(m.group(2).strip(), md_dir) + m.group(3),
                 content,
             )
+
+            def fix_front(m):
+                url = fix_url(m.group("url"), md_dir)
+                # fix_url 只认识 by_base 里的“原图→webp”映射；映射不到则原文不动
+                return f"{m.group('indent')}{m.group('key')}: {m.group('q')}{url}{m.group('q')}{m.group('tail')}"
+            content = RE_FRONTMATTER_ASSET.sub(fix_front, content)
             if content != orig:
                 with open(p, "w", encoding="utf-8") as f:
                     f.write(content)

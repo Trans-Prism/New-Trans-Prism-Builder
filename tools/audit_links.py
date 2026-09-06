@@ -14,7 +14,7 @@ from urllib.parse import unquote
 
 SKIP_SCHEMES = (
     "http://", "https://", "//", "data:", "mailto:", "tel:",
-    "javascript:", "weixin://", "tg://",
+    "javascript:", "weixin://", "tg://", "matrix:",
 )
 
 dist = sys.argv[1]

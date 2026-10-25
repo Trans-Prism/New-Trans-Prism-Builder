@@ -19,6 +19,21 @@ import shutil
 import subprocess
 
 THEME_VERSION = "^0.9.1761114650"  # 与 RLE-wiki 在用版本对齐
+
+# ⚠️ templates/package.json.tmpl 里有一对"防浮动"精确 pin，别改回 ^ 范围：
+#   "vitepress-sidebar": "1.40.0"   +   pnpm.overrides."qsu": "1.21.0"
+#
+# qsu@1.100.0（2026-10-23 发布）把 capitalizeEachWords 改名成 capitalizeEachWord，
+# 而 vitepress-sidebar（≤1.40.0，本项目生成工程唯一用到 qsu 的包）仍按旧名具名
+# import（dist/helper.js: import { capitalizeEachWords } from "qsu"）。
+# sidebar 对 qsu 的依赖区间是 ^1.18.0，而语义化上 1.100.0 > 1.21.0，所以每次干净
+# 的 `pnpm install`（CI 没锁文件，--no-frozen-lockfile）都会装上改名后的坏版本，
+# `vitepress build` 在加载 docs/.vitepress/config.ts 时直接挂：
+#   SyntaxError: The requested module 'qsu' does not provide an export named
+#   'capitalizeEachWords'
+# 所以 qsu 必须 override 回最后一个仍导出旧名的 1.21.0；sidebar 也必须精确 pin，
+# 否则它一旦升级到改用新 API 的版本，又会跟被 pin 住的 qsu 打架。等 sidebar 上游
+# 适配 qsu 新命名（或 qsu 补回别名导出）后，再把这两个 pin 一起松开。
 TEMPLATES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "templates")
 
 
